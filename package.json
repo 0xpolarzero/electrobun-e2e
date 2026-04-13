@@ -1,8 +1,19 @@
 {
   "name": "electrobun-e2e",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.0.0-development",
+  "description": "Shared Electrobun end-to-end infrastructure for headless OrbStack Linux test runs.",
+  "homepage": "https://github.com/0xpolarzero/electrobun-e2e#readme",
+  "bugs": {
+    "url": "https://github.com/0xpolarzero/electrobun-e2e/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xpolarzero/electrobun-e2e.git"
+  },
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "README.md",
     "src"
@@ -20,6 +31,10 @@
     "./temp-home": "./src/temp-home.ts"
   },
   "scripts": {
+    "build": "bun run typecheck",
+    "release": "semantic-release",
+    "release:dry": "semantic-release --dry-run --no-ci",
+    "test": "bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,6 +42,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.3.11",
+    "semantic-release": "^25.0.3",
     "typescript": "^6.0.2"
   },
   "engines": {
