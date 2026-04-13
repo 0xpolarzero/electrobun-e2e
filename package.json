@@ -1,0 +1,36 @@
+{
+  "name": "electrobun-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "README.md",
+    "src"
+  ],
+  "bin": {
+    "electrobun-e2e": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./electrobun-paths": "./src/electrobun-paths.ts",
+    "./launch": "./src/launch.ts",
+    "./linux-launch-retry": "./src/linux-launch-retry.ts",
+    "./orbstack": "./src/orbstack.ts",
+    "./temp-home": "./src/temp-home.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electrobun-browser-tools": "1.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.11",
+    "typescript": "^6.0.2"
+  },
+  "engines": {
+    "bun": ">=1.3.10"
+  },
+  "packageManager": "bun@1.3.10"
+}
