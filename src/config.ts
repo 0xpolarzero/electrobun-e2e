@@ -3,11 +3,21 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_MACHINE_IMAGE = "ubuntu:24.04";
+const DEFAULT_BUILD_INPUT_PATHS = [
+  "assets",
+  "electrobun.config.ts",
+  "package.json",
+  "scripts",
+  "src",
+  "tsconfig.json",
+  "vite.config.ts",
+];
 const DEFAULT_SYNC_EXCLUDES = ["build", "dist", "node_modules"];
 const DEFAULT_TEST_FILE_GLOBS = ["*.test.ts", "*.spec.ts", "*_test.ts", "*_spec.ts"];
 
 export interface ElectrobunE2EConfig {
   appName: string;
+  buildInputPaths?: string[];
   buildCommand?: string[];
   extraAptPackages?: string[];
   installCommand?: string[];
@@ -23,6 +33,7 @@ export interface ElectrobunE2EConfig {
 
 export interface ResolvedElectrobunE2EConfig {
   appName: string;
+  buildInputPaths: string[];
   buildCommand: string[];
   bunVersion: string;
   configPath: string;
@@ -81,6 +92,7 @@ export async function loadElectrobunE2EConfig(
 
   return {
     appName: config.appName,
+    buildInputPaths: dedupe(config.buildInputPaths ?? DEFAULT_BUILD_INPUT_PATHS),
     buildCommand: config.buildCommand ?? ["bun", "run", "build"],
     bunVersion: readBunVersion(join(consumerRootDir, "package.json")),
     configPath: resolvedConfigPath,

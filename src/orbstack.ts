@@ -139,6 +139,7 @@ done
 sync_host_paths=(${toShellArray(syncPairs.map((pair) => pair.hostPath))})
 sync_linux_paths=(${toShellArray(syncPairs.map((pair) => pair.linuxPath))})
 sync_excludes=(${toShellArray(config.syncExcludes)})
+build_input_paths=(${toShellArray(config.buildInputPaths)})
 dependency_linux_paths=(${toShellArray([
     sharedLinuxPath,
     ...config.localDependencyPaths.map((hostPath) =>
@@ -176,14 +177,54 @@ for raw_dependency_path in "\${dependency_linux_paths[@]}"; do
 done
 
 workspace_dir="$(expand_path ${shellQuote(config.linuxWorkspaceDir)})"
+build_stamp_path="$workspace_dir/build/.electrobun-e2e-build-stamp"
 cd "$workspace_dir"
-rm -rf build dist
 
 install_cmd=(${toShellArray(config.installCommand)})
 build_cmd=(${toShellArray(config.buildCommand)})
 
 "\${install_cmd[@]}"
-"\${build_cmd[@]}"
+
+should_rebuild_app() {
+  if [[ ! -d build ]] || [[ ! -d dist ]] || [[ ! -f "$build_stamp_path" ]]; then
+    return 0
+  fi
+
+  for raw_build_input in "\${build_input_paths[@]}"; do
+    if [[ -z "$raw_build_input" ]]; then
+      continue
+    fi
+
+    local build_input
+    build_input="$(expand_path "$raw_build_input")"
+    if [[ ! -e "$build_input" ]]; then
+      continue
+    fi
+
+    if [[ -d "$build_input" ]]; then
+      if find "$build_input" -type f -newer "$build_stamp_path" -print -quit | grep -q .; then
+        return 0
+      fi
+      continue
+    fi
+
+    if [[ "$build_input" -nt "$build_stamp_path" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if should_rebuild_app; then
+  echo "Building app bundle on OrbStack..."
+  rm -rf build dist
+  "\${build_cmd[@]}"
+  mkdir -p "$(dirname "$build_stamp_path")"
+  touch "$build_stamp_path"
+else
+  echo "Skipping app rebuild on OrbStack; build inputs unchanged."
+fi
 
 export ${toShellExports({
     ...DEFAULT_RUNTIME_ENV,
