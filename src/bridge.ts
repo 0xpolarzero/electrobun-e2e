@@ -1,6 +1,9 @@
 import { connect, type Driver, type Page } from "electrobun-browser-tools";
 import { formatSpawnFailure, pumpLines } from "./process";
 
+const DEFAULT_BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = 2_000;
+const DEFAULT_BRIDGE_CONNECT_POLL_INTERVAL_MS = 100;
+
 export interface BridgeMetadata {
   appId: string;
   bridgeUrl: string | null;
@@ -122,17 +125,49 @@ export async function connectToElectrobunBridge(
   metadata: BridgeMetadata,
   timeoutMs = 20_000,
 ): Promise<ConnectedElectrobunBridge> {
-  const driver = await connect({
-    ...(metadata.bridgeUrl ? { url: metadata.bridgeUrl } : { app: metadata.appId }),
-    timeout: timeoutMs,
-  });
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
 
-  return {
-    appId: metadata.appId,
-    bridgeUrl: metadata.bridgeUrl,
-    driver,
-    page: driver.page("active"),
-  };
+  while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    const attemptTimeoutMs = Math.max(
+      1,
+      Math.min(DEFAULT_BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS, remainingMs),
+    );
+
+    try {
+      const driver = await connect({
+        ...(metadata.bridgeUrl ? { url: metadata.bridgeUrl } : { app: metadata.appId }),
+        timeout: attemptTimeoutMs,
+      });
+
+      return {
+        appId: metadata.appId,
+        bridgeUrl: metadata.bridgeUrl,
+        driver,
+        page: driver.page("active"),
+      };
+    } catch (error) {
+      lastError = error;
+      const sleepMs = Math.min(
+        DEFAULT_BRIDGE_CONNECT_POLL_INTERVAL_MS,
+        Math.max(0, deadline - Date.now()),
+      );
+      if (sleepMs > 0) {
+        await Bun.sleep(sleepMs);
+      }
+    }
+  }
+
+  const reason =
+    lastError instanceof Error
+      ? lastError.message
+      : lastError
+        ? String(lastError)
+        : "Bridge never accepted a connection.";
+  throw new Error(
+    `Timed out connecting to Electrobun bridge (${metadata.bridgeUrl ?? metadata.appId}): ${reason}`,
+  );
 }
 
 function escapeForRegExp(value: string): string {

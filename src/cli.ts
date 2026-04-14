@@ -16,10 +16,10 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "setup":
-      setupOrbStackMachine(config);
+      await setupOrbStackMachine(config);
       return;
     case "run":
-      runOrbStackTests(config, forwardedArgs);
+      await runOrbStackTests(config, forwardedArgs);
       return;
     default:
       throw new Error(`Unsupported command: ${String(command)}`);

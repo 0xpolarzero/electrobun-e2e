@@ -25,6 +25,13 @@ export function createIsolatedRuntimeEnv(
   const xdgCacheHome = join(homeDir, ".cache");
   const xdgStateHome = join(homeDir, ".state");
   const tmpDir = join(homeDir, ".tmp");
+  const linuxDesktopHardening =
+    process.platform === "linux"
+      ? {
+          GTK_A11Y: "none",
+          NO_AT_BRIDGE: "1",
+        }
+      : {};
 
   return {
     ...process.env,
@@ -35,6 +42,7 @@ export function createIsolatedRuntimeEnv(
     XDG_CONFIG_HOME: xdgConfigHome,
     XDG_DATA_HOME: xdgDataHome,
     XDG_STATE_HOME: xdgStateHome,
+    ...linuxDesktopHardening,
     ...overrides,
   };
 }

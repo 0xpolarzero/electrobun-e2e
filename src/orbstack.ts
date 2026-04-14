@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { dirname } from "node:path";
 import type { ResolvedElectrobunE2EConfig } from "./config";
 import { resolveSiblingLinuxPath } from "./config";
@@ -37,7 +38,9 @@ const DEFAULT_RETRY_ENV = {
   ELECTROBUN_E2E_LAUNCH_RETRY_DELAY_MS: "750",
 };
 
-export function setupOrbStackMachine(config: ResolvedElectrobunE2EConfig): void {
+export async function setupOrbStackMachine(
+  config: ResolvedElectrobunE2EConfig,
+): Promise<void> {
   assertOrbReady();
 
   if (!machineExists(config.machineName)) {
@@ -71,13 +74,13 @@ fi
 mkdir -p "$HOME/code"
 `;
 
-  runRemoteScript(config.machineName, remoteScript);
+  await runRemoteScript(config.machineName, remoteScript);
 }
 
-export function runOrbStackTests(
+export async function runOrbStackTests(
   config: ResolvedElectrobunE2EConfig,
   forwardedArgs: string[],
-): void {
+): Promise<void> {
   assertOrbReady();
 
   if (!machineExists(config.machineName)) {
@@ -104,6 +107,7 @@ export function runOrbStackTests(
       linuxPath: resolveSiblingLinuxPath(dirname(config.linuxWorkspaceDir), hostPath),
     })),
   ];
+  const requestedShardCount = process.env.ELECTROBUN_E2E_SHARDS?.trim() || "1";
 
   const remoteScript = `
 set -euo pipefail
@@ -187,8 +191,97 @@ export ${toShellExports({
     ...config.runtimeEnv,
   })}
 
+run_headless_test_cmd() {
+  dbus-run-session -- xvfb-run -a -s "-screen 0 1440x900x24 +extension GLX +render -noreset" "$@"
+}
+
+run_sharded_bun_tests() {
+  local requested_shards="$1"
+  shift
+  local files=("$@")
+  local total_files="\${#files[@]}"
+  local shard_stagger_seconds="2"
+
+  if [[ "$requested_shards" -lt 2 ]] || [[ "$total_files" -lt 2 ]]; then
+    run_headless_test_cmd bun test --max-concurrency=1 "\${files[@]}"
+    return
+  fi
+
+  local shard_count="$requested_shards"
+  if [[ "$shard_count" -gt "$total_files" ]]; then
+    shard_count="$total_files"
+  fi
+
+  echo "Starting $shard_count e2e shard(s) on OrbStack..."
+
+  local shard_dir
+  shard_dir="$(mktemp -d)"
+  local -a shard_lists=()
+  local -a shard_pids=()
+
+  cleanup_shard_processes() {
+    for shard_pid in "\${shard_pids[@]}"; do
+      if kill -0 "$shard_pid" >/dev/null 2>&1; then
+        kill "$shard_pid" >/dev/null 2>&1 || true
+      fi
+    done
+  }
+
+  trap cleanup_shard_processes INT TERM
+
+  for ((shard_index = 0; shard_index < shard_count; shard_index += 1)); do
+    shard_lists+=("$shard_dir/shard-$shard_index.txt")
+    : > "$shard_dir/shard-$shard_index.txt"
+  done
+
+  for ((file_index = 0; file_index < total_files; file_index += 1)); do
+    local target_index=$((file_index % shard_count))
+    printf '%s\n' "\${files[$file_index]}" >> "\${shard_lists[$target_index]}"
+  done
+
+  for ((shard_index = 0; shard_index < shard_count; shard_index += 1)); do
+    local shard_list="\${shard_lists[$shard_index]}"
+    if [[ ! -s "$shard_list" ]]; then
+      continue
+    fi
+
+    local shard_log="$shard_dir/shard-$shard_index.log"
+
+    (
+      mapfile -t shard_files < "$shard_list"
+      {
+        echo "== e2e shard $((shard_index + 1))/$shard_count =="
+        printf 'files: %s\n' "\${shard_files[*]}"
+        run_headless_test_cmd bun test --max-concurrency=1 "\${shard_files[@]}"
+      } 2>&1 | tee "$shard_log"
+    ) &
+
+    shard_pids+=("$!")
+
+    if [[ "$shard_index" -lt $((shard_count - 1)) ]]; then
+      sleep "$shard_stagger_seconds"
+    fi
+  done
+
+  local shard_failed=0
+  for shard_pid in "\${shard_pids[@]}"; do
+    if ! wait "$shard_pid"; then
+      shard_failed=1
+    fi
+  done
+
+  trap - INT TERM
+  rm -rf "$shard_dir"
+
+  if [[ "$shard_failed" -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 forwarded_args=(${toShellArray(forwardedArgs)})
 normalized_forwarded_args=()
+requested_shards_raw=${shellQuote(requestedShardCount)}
+requested_shards=1
 
 for raw_arg in "\${forwarded_args[@]}"; do
   if [[ "$raw_arg" != -* ]] && [[ "$raw_arg" != ./* ]] && [[ "$raw_arg" != /* ]] && [[ -e "$raw_arg" ]]; then
@@ -198,11 +291,15 @@ for raw_arg in "\${forwarded_args[@]}"; do
   fi
 done
 
+if [[ "$requested_shards_raw" =~ ^[1-9][0-9]*$ ]]; then
+  requested_shards="$requested_shards_raw"
+fi
+
 if [[ "\${#normalized_forwarded_args[@]}" -gt 0 ]]; then
   if [[ ${config.testCommand ? "1" : "0"} -eq 1 ]]; then
     test_cmd=(${toShellArray(config.testCommand ?? [])} "\${normalized_forwarded_args[@]}")
   else
-    test_cmd=(bun test --max-concurrency=1 "\${normalized_forwarded_args[@]}")
+    test_files=("\${normalized_forwarded_args[@]}")
   fi
 else
   ${
@@ -213,15 +310,33 @@ mapfile -t discovered_test_files < <(
   rg --files e2e ${config.testFileGlobs.map((pattern) => `-g ${shellQuote(pattern)}`).join(" ")} |
     sed 's#^#./#'
 )
-test_cmd=(bun test --max-concurrency=1 "\${discovered_test_files[@]}")
+test_files=("\${discovered_test_files[@]}")
 `
   }
 fi
 
-dbus-run-session -- xvfb-run -a -s "-screen 0 1440x900x24" "\${test_cmd[@]}"
+if [[ ${config.testCommand ? "1" : "0"} -eq 1 ]]; then
+  run_headless_test_cmd "\${test_cmd[@]}"
+elif [[ "$requested_shards" -gt 1 ]]; then
+  shardable=1
+  for raw_arg in "\${normalized_forwarded_args[@]}"; do
+    if [[ "$raw_arg" == -* ]]; then
+      shardable=0
+      break
+    fi
+  done
+
+  if [[ "$shardable" -eq 1 ]]; then
+    run_sharded_bun_tests "$requested_shards" "\${test_files[@]}"
+  else
+    run_headless_test_cmd bun test --max-concurrency=1 "\${test_files[@]}"
+  fi
+else
+  run_headless_test_cmd bun test --max-concurrency=1 "\${test_files[@]}"
+fi
 `;
 
-  runRemoteScript(config.machineName, remoteScript);
+  await runRemoteScript(config.machineName, remoteScript);
 }
 
 function assertOrbReady(): void {
@@ -275,16 +390,50 @@ function runHostCommand(command: string[]): void {
   }
 }
 
-function runRemoteScript(machineName: string, script: string): void {
-  const result = spawnSync("orb", ["-m", machineName, "bash", "-s"], {
-    input: script,
+async function runRemoteScript(machineName: string, script: string): Promise<void> {
+  const proc = spawn("orb", ["-m", machineName, "bash", "-s"], {
     stdio: ["pipe", "inherit", "inherit"],
   });
+  proc.stdin.end(script);
 
-  if (result.status !== 0) {
-    throw new Error(
-      `Remote OrbStack command failed on "${machineName}" (${result.status ?? "null"}).`,
-    );
+  let interrupted = false;
+  const forwardSigint = () => {
+    interrupted = true;
+    process.stderr.write("\nInterrupted, stopping OrbStack e2e run...\n");
+    proc.kill("SIGINT");
+    setTimeout(() => proc.kill("SIGTERM"), 1_000).unref();
+    setTimeout(() => proc.kill("SIGKILL"), 4_000).unref();
+  };
+  const forwardSigterm = () => {
+    interrupted = true;
+    proc.kill("SIGTERM");
+    setTimeout(() => proc.kill("SIGKILL"), 3_000).unref();
+  };
+
+  process.once("SIGINT", forwardSigint);
+  process.once("SIGTERM", forwardSigterm);
+
+  try {
+    const [exitCode, signal] = (await once(proc, "exit")) as [
+      number | null,
+      NodeJS.Signals | null,
+    ];
+
+    if (interrupted) {
+      process.exitCode = 130;
+      return;
+    }
+
+    if (signal) {
+      throw new Error(`Remote OrbStack command exited from signal ${signal}.`);
+    }
+
+    if (exitCode !== 0) {
+      throw new Error(`Remote OrbStack command failed on "${machineName}" (${exitCode}).`);
+    }
+  } finally {
+    process.removeListener("SIGINT", forwardSigint);
+    process.removeListener("SIGTERM", forwardSigterm);
   }
 }
 

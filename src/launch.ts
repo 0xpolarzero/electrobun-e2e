@@ -109,35 +109,21 @@ export async function launchElectrobunApp(
   const workspaceDir =
     options.workspaceDir ?? resolveElectrobunWorkspaceDir(options.projectRoot);
   const providedHomeDir = options.homeDir;
-  const preparedRuntimeEnv = providedHomeDir
-    ? createIsolatedRuntimeEnv(providedHomeDir, options.env)
-    : null;
-
-  if (providedHomeDir && preparedRuntimeEnv) {
-    await ensureIsolatedHomeDirLayout(providedHomeDir);
-    await options.beforeLaunch?.({
-      homeDir: providedHomeDir,
-      runtimeEnv: preparedRuntimeEnv,
-      workspaceDir,
-    });
-  }
 
   return await withTransientLinuxLaunchRetries(
     options.retryLabel ?? "launchElectrobunApp",
     async () => {
       const ownsHomeDir = !providedHomeDir;
       const homeDir = providedHomeDir ?? (await createIsolatedHomeDir());
-      const runtimeEnv = preparedRuntimeEnv ?? createIsolatedRuntimeEnv(homeDir, options.env);
+      const runtimeEnv = createIsolatedRuntimeEnv(homeDir, options.env);
 
       try {
-        if (ownsHomeDir) {
-          await ensureIsolatedHomeDirLayout(homeDir);
-          await options.beforeLaunch?.({
-            homeDir,
-            runtimeEnv,
-            workspaceDir,
-          });
-        }
+        await ensureIsolatedHomeDirLayout(homeDir);
+        await options.beforeLaunch?.({
+          homeDir,
+          runtimeEnv,
+          workspaceDir,
+        });
 
         return await launchElectrobunAppOnce({
           bridgeMetadata: options.bridgeMetadata,

@@ -1,5 +1,6 @@
 const DEFAULT_TRANSIENT_LINUX_LAUNCH_PATTERNS = [
   "timed out waiting for bridge metadata",
+  "timed out connecting to electrobun bridge",
   "exited before the bridge became available",
   "glxbadwindow",
   "segmentation fault",
@@ -53,8 +54,9 @@ export async function withTransientLinuxLaunchRetries<T>(
       }
 
       const retryNumber = attempt + 1;
+      const summary = errorMessage.split("\n", 1)[0] ?? errorMessage;
       console.warn(
-        `${label}: retrying transient Linux launch failure (${retryNumber}/${maxRetries})`,
+        `${label}: retrying transient Linux launch failure (${retryNumber}/${maxRetries}): ${summary}`,
       );
       await Bun.sleep(getTransientLinuxLaunchRetryDelayMs());
     }
